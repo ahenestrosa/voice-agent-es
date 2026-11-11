@@ -31,7 +31,9 @@ The repo has three parts:
 ```bash
 uv sync --group dev
 cp .env.example .env            # fill ELEVENLABS_API_KEY and TOOL_SECRET
-uv run pytest -q                # backend tests
+uv run pytest -q                # backend + script tests (no network)
+uvx ruff check backend scripts tests
+uvx pyright --pythonpath .venv/bin/python   # strict mode, configured in pyproject.toml
 
 # expose the backend publicly so the agent can reach it
 uv run uvicorn backend.app:app --port 8000
@@ -51,7 +53,7 @@ Then open the agent in the ElevenLabs dashboard and call it. Test identities:
 | Lucía Fernández | 30123456 | 4821 (débito) |
 | Martín Gómez | 27987654 | 1190 (crédito) |
 
-The voice is pinned in `agent/agent.json` (`tts.voice_id`) to "Agustín – Relaxed, Warm and Approachable", a male Argentine voice from the Voice Library. A Voice Library voice has to be added to your own library (the "Add to my voices" button) before an agent can use it; otherwise the deploy fails with `voice_not_found`. The LLM is the account default; to pin it, set `agent.prompt.llm` and deploy again.
+The voice is pinned in `agent/agent.json` (`tts.voice_id`) to "Agustín – Relaxed, Warm and Approachable", a male Argentine voice from the Voice Library. A Voice Library voice has to be added to your own library (the "Add to my voices" button) before an agent can use it; otherwise the deploy fails with `voice_not_found`. The LLM is pinned to `claude-haiku-5-5` with `reasoning_effort: "none"`: on a phone call every second of thinking is silence the caller hears, and at about $0.0015 per call minute it is one of the cheapest models ElevenLabs offers. To try another, change `agent.prompt.llm` and deploy again.
 
 ## Evals
 
