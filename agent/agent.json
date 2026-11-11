@@ -1,0 +1,11 @@
+{
+  "name": "Banco Austral — Matías (es-AR)",
+  "conversation_config": {
+    "agent": {
+      "first_message": "Hola, soy Matías, el asistente de Banco Austral. ¿En qué te puedo ayudar?",
+      "language": "es",
+      "prompt": {}
+    },
+    "tts": {"voice_id": "ByVRQtaK1WDOvTmP1PKO"}
+  }
+}
