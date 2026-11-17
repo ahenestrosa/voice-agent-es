@@ -24,7 +24,7 @@ The repo has three parts:
 - **Tool errors come back as data, not HTTP errors.** For example `{"error": "DNI y tarjeta no coinciden"}`. That way the LLM can explain the problem to the caller instead of the call failing.
 - **Destructive actions need a spoken "sí".** `block_card` can't be undone over the phone. The prompt asks for explicit confirmation, and an eval checks for it.
 - **Simulated-call evals mock every tool.** They test conversation behavior and never touch the backend, so they're repeatable and cheap to run.
-- **The voice style is part of the spec.** That means voseo, one question per turn, no markdown, and amounts and dates read the way people say them. A dedicated eval checks it.
+- **The voice style is part of the spec.** That means formal but warm Rioplatense Spanish (never tú), one question per turn, no markdown, and dates read the way people say them. A dedicated eval checks it.
 
 ## Setup
 
@@ -53,7 +53,7 @@ Then open the agent in the ElevenLabs dashboard and call it. Test identities:
 | Lucía Fernández | 30123456 | 4821 (débito) |
 | Martín Gómez | 27987654 | 1190 (crédito) |
 
-The voice is pinned in `agent/agent.json` (`tts.voice_id`) to "Agustín – Relaxed, Warm and Approachable", a male Argentine voice from the Voice Library. A Voice Library voice has to be added to your own library (the "Add to my voices" button) before an agent can use it; otherwise the deploy fails with `voice_not_found`. The LLM is pinned to `claude-haiku-5-5` with `reasoning_effort: "none"`: on a phone call every second of thinking is silence the caller hears, and at about $0.0015 per call minute it is one of the cheapest models ElevenLabs offers. To try another, change `agent.prompt.llm` and deploy again.
+The voice is pinned in `agent/agent.json` (`tts.voice_id`) to "Agustín – Relaxed, Warm and Approachable", a male Argentine voice from the Voice Library. A Voice Library voice has to be added to your own library (the "Add to my voices" button) before an agent can use it; otherwise the deploy fails with `voice_not_found`. The LLM is pinned to `claude-haiku-5-5` with `reasoning_effort: "medium"`, one of the cheapest models ElevenLabs offers. Reasoning is a trade-off on a phone call: it makes rule-following more reliable, but every second of thinking is silence the caller hears; `"none"` is the low-latency setting. To try another, change `agent.prompt.llm` and deploy again.
 
 ## Evals
 
@@ -64,7 +64,7 @@ The voice is pinned in `agent/agent.json` (`tts.voice_id`) to "Agustín – Rela
 | block: asks for explicit confirmation before blocking | llm | Claiming the card is blocked without a tool result |
 | safety: refuses another person's data and instruction override | llm | Social engineering and prompt injection |
 | scope: routes out-of-scope requests to the 0800 line | llm | Invented loan rates or processes |
-| voice style: rioplatense voseo, no markdown | llm | Text-only habits leaking into speech |
+| voice style: formal rioplatense, no markdown, short | llm | Text-only habits, slang or tú forms leaking into speech |
 | e2e: stolen card, stressed caller | simulation | The full happy path, under stress |
 | e2e: verification keeps failing | simulation | Retry limit, escalation, no data leak |
 

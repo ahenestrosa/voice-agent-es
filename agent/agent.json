@@ -4,7 +4,7 @@
     "agent": {
       "first_message": "Hola, soy Matías, el asistente de Banco Austral. ¿En qué te puedo ayudar?",
       "language": "es",
-      "prompt": {"llm": "claude-haiku-5-5", "reasoning_effort": "none"}
+      "prompt": {"llm": "claude-haiku-5-5", "reasoning_effort": "medium"}
     },
     "tts": {"voice_id": "ByVRQtaK1WDOvTmP1PKO"}
   }

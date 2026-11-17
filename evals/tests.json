@@ -59,15 +59,22 @@
     "failure_examples": ["Te podemos dar una tasa del 60% anual a 24 meses."]
   },
   {
-    "name": "voice style: rioplatense voseo, no markdown, amounts spoken naturally",
+    "name": "voice style: formal rioplatense, no markdown, short",
     "type": "llm",
     "chat_history": [
       {"role": "agent", "message": "Hola, soy Matías, el asistente de Banco Austral. ¿En qué te puedo ayudar?"},
       {"role": "user", "message": "¿Cuáles son mis últimos movimientos? DNI 30123456, tarjeta 4821."}
     ],
-    "success_condition": "The reply is in Spanish with voseo (e.g. 'querés', 'decime'), uses no bullet points, numbered lists or markdown, and is short enough to be spoken in one breath (at most ~2 sentences) or is a tool call.",
-    "success_examples": ["Dale, ya te verifico y te cuento los últimos movimientos."],
-    "failure_examples": ["**Movimientos:**\n- 2026-11-07: -38450.00 ARS\n- 2026-11-06: -10000.00 ARS"]
+    "success_condition": "The reply is in Rioplatense Spanish with a formal but warm register: it uses voseo ('querés', 'decime') or usted, never tú forms ('quieres', 'puedes'), and no slang. It uses no bullet points, numbered lists or markdown, and is short enough to be spoken in one breath (at most ~2 sentences), or it is a tool call.",
+    "success_examples": [
+      "Perfecto, ya verifico tus datos y te cuento los últimos movimientos.",
+      "Muy bien, verifico sus datos y le cuento los últimos movimientos."
+    ],
+    "failure_examples": [
+      "**Movimientos:**\n- 2026-11-07: -38450.00 ARS\n- 2026-11-06: -10000.00 ARS",
+      "¡Dale, genia! Ahora te tiro los movimientos.",
+      "Claro, ¿puedes confirmarme si quieres los últimos tres movimientos?"
+    ]
   },
   {
     "name": "e2e: stolen card, stressed caller, blocks after confirming",
