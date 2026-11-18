@@ -26,18 +26,25 @@ AGENT_DIR = ROOT / "agent"
 # Public URL of backend/app.py (a cloudflared tunnel in development); every tool posts to it.
 BACKEND_URL = os.environ.get("BACKEND_URL", "")
 TOOL_SECRET = os.environ.get("TOOL_SECRET", "")
+# Filled by ElevenLabs on every call, never by the LLM; the backend binds each Session to it.
+CONVERSATION_ID_PROPERTY: JsonObject = {"type": "string", "dynamic_variable": "system__conversation_id"}
 
 
 def build_tool_config(tool_definition: JsonObject, backend_url: str, tool_secret: str) -> JsonObject:
-    """Fill the backend URL and the shared-secret header into one tool definition from agent/tools.json.
+    """Fill the backend URL, the shared-secret header and the conversation ID into one tool from agent/tools.json.
 
-    The secret goes in as a plain header value, which ElevenLabs stores in the tool config and shows
-    to anyone with dashboard access. A real deployment would use a workspace secret reference instead.
+    The conversation ID is added here rather than in tools.json, so no tool can be deployed without
+    it; the backend rejects any request that lacks it. The secret goes in as a plain header value,
+    which ElevenLabs stores in the tool config and shows to anyone with dashboard access. A real
+    deployment would use a workspace secret reference instead.
     """
     tool_config = copy.deepcopy(tool_definition)
     api_schema = tool_config["api_schema"]
     api_schema["url"] = api_schema["url"].replace("{BACKEND_URL}", backend_url.rstrip("/"))
     api_schema["request_headers"] = {"X-Tool-Secret": tool_secret}
+    body_schema = api_schema["request_body_schema"]
+    body_schema["properties"]["conversation_id"] = CONVERSATION_ID_PROPERTY
+    body_schema["required"] = [*body_schema["required"], "conversation_id"]
     return {"tool_config": tool_config}
 
 

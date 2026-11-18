@@ -9,7 +9,15 @@ from scripts.elevenlabs_api import JsonObject
 
 TOOL_DEFINITION: JsonObject = {
     "name": "get_balance",
-    "api_schema": {"url": "{BACKEND_URL}/tools/get_balance", "method": "POST"},
+    "api_schema": {
+        "url": "{BACKEND_URL}/tools/get_balance",
+        "method": "POST",
+        "request_body_schema": {
+            "type": "object",
+            "properties": {"session_token": {"type": "string", "description": "token"}},
+            "required": ["session_token"],
+        },
+    },
 }
 AGENT_DEFINITION: JsonObject = {"name": "demo", "conversation_config": {"agent": {"prompt": {}}}}
 
@@ -26,6 +34,14 @@ def test_tool_config_carries_the_secret_header() -> None:
     config = build_tool_config(TOOL_DEFINITION, "https://example.com", "s3cret")
     headers = config["tool_config"]["api_schema"]["request_headers"]
     assert headers == {"X-Tool-Secret": "s3cret"}, f"unexpected headers {headers}"
+
+
+def test_tool_config_has_platform_filled_conversation_id() -> None:
+    """The backend binds Sessions to the Call, so every tool must send an ID the LLM cannot fill or fake."""
+    body_schema = build_tool_config(TOOL_DEFINITION, "https://example.com", "s3cret")["tool_config"]["api_schema"]["request_body_schema"]
+    conversation_id = body_schema["properties"]["conversation_id"]
+    assert conversation_id == {"type": "string", "dynamic_variable": "system__conversation_id"}, f"unexpected property {conversation_id}"
+    assert body_schema["required"] == ["session_token", "conversation_id"], f"conversation_id not required: {body_schema['required']}"
 
 
 def test_building_configs_leaves_the_loaded_definitions_unchanged() -> None:

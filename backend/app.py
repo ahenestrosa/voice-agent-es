@@ -6,7 +6,8 @@ instead of the platform treating it as a failed tool call.
 
 Account tools take an opaque session_token issued by verify_customer, never a customer id.
 The prompt tells the agent to verify first, but the backend enforces it: a jailbroken agent
-still cannot read an account the caller did not verify.
+still cannot read an account the caller did not verify. A Session is also bound to the Call
+that opened it, through the conversation_id ElevenLabs fills into every request.
 """
 
 # Standard library
@@ -15,16 +16,26 @@ import os
 import secrets
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from enum import StrEnum, auto
 from typing import Annotated, NotRequired, TypedDict
 
 # Third-party
-from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-load_dotenv()
+# Local
+from backend.db import read_connection, transaction
+from backend.models import BlockOutcome, BlockReason, CardStatus, TransactionRow
+from backend.queries import (
+    find_verified_customer,
+    lock_card,
+    open_session,
+    recent_transactions,
+    record_block,
+    session_customer,
+    utc_now,
+)
+
+# backend.db already loaded ROOT/.env, so the secret is in the environment by now.
 TOOL_SECRET = os.environ.get("TOOL_SECRET", "")
 LOG = logging.getLogger("bank")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -35,77 +46,25 @@ MAX_TRANSACTIONS = 10
 NOT_VERIFIED_MESSAGE = "sesión inválida, verificá la identidad primero"
 
 
-class CardKind(StrEnum):
-    """Card type, with the Spanish word the agent says aloud."""
+class CallRequest(BaseModel):
+    """Fields every tool call carries.
 
-    DEBIT = "débito"
-    CREDIT = "crédito"
+    ElevenLabs fills `conversation_id` from `system__conversation_id`; the LLM never sees it.
+    An empty value is rejected, because a Session bound to "" would be shared by every Call.
+    """
 
-
-class CardStatus(StrEnum):
-    """Whether a card can still be used."""
-
-    ACTIVE = auto()
-    BLOCKED = auto()
+    conversation_id: str = Field(min_length=1)
 
 
-class BlockReason(StrEnum):
-    """Why the caller wants the card blocked; the same values as the enum in agent/tools.json."""
-
-    LOST = auto()
-    STOLEN = auto()
-    FRAUD = auto()
-
-
-class BlockOutcome(StrEnum):
-    """What block_card did."""
-
-    BLOCKED = auto()
-    ALREADY_BLOCKED = auto()
-
-
-class Transaction(TypedDict):
-    """One account movement as the agent receives it; negative amounts are charges."""
-
-    id: str
-    date: str
-    merchant: str
-    amount_ars: float
-
-
-@dataclass
-class Card:
-    """One of a customer's cards."""
-
-    kind: CardKind
-    status: CardStatus = CardStatus.ACTIVE
-
-
-@dataclass
-class Customer:
-    """A bank customer and their account."""
-
-    full_name: str
-    dni: str
-    cards: dict[str, Card]  # keyed by the card's last 4 digits
-    balance_ars: float
-    transactions: list[Transaction]  # newest first
-
-    @property
-    def first_name(self) -> str:
-        """The name the agent greets the caller with."""
-        return self.full_name.split()[0]
-
-
-class VerifyRequest(BaseModel):
+class VerifyRequest(CallRequest):
     """Identity data as the agent heard it."""
 
     dni: str
     card_last4: str
 
 
-class SessionRequest(BaseModel):
-    """A request from a verified call."""
+class SessionRequest(CallRequest):
+    """A request from a verified Call."""
 
     session_token: str
 
@@ -148,10 +107,19 @@ class BalanceResult(TypedDict):
     balance_ars: float
 
 
+class SpokenTransaction(TypedDict):
+    """One movement as the agent receives it; negative amounts are charges."""
+
+    id: str
+    date: str
+    merchant: str
+    amount_ars: float
+
+
 class TransactionsResult(TypedDict):
     """The most recent movements, newest first."""
 
-    transactions: list[Transaction]
+    transactions: list[SpokenTransaction]
 
 
 class BlockResult(TypedDict):
@@ -161,50 +129,9 @@ class BlockResult(TypedDict):
     case_id: NotRequired[str]
 
 
-# ponytail: in-memory demo data and sessions; swap for a core-banking client and an expiring session store.
-CUSTOMERS: dict[str, Customer] = {
-    "c_001": Customer(
-        full_name="Lucía Fernández",
-        dni="30123456",
-        cards={"4821": Card(CardKind.DEBIT)},
-        balance_ars=1_254_300.50,
-        transactions=[
-            {"id": "t_9001", "date": "2026-11-07", "merchant": "Supermercado Día", "amount_ars": -38_450.00},
-            {"id": "t_9002", "date": "2026-11-06", "merchant": "SUBE recarga", "amount_ars": -10_000.00},
-            {"id": "t_9003", "date": "2026-11-05", "merchant": "Transferencia recibida", "amount_ars": 450_000.00},
-            {"id": "t_9004", "date": "2026-11-04", "merchant": "MercadoLibre", "amount_ars": -129_999.00},
-        ],
-    ),
-    "c_002": Customer(
-        full_name="Martín Gómez",
-        dni="27987654",
-        cards={"1190": Card(CardKind.CREDIT)},
-        balance_ars=82_000.00,
-        transactions=[
-            {"id": "t_8001", "date": "2026-11-08", "merchant": "YPF", "amount_ars": -45_000.00},
-        ],
-    ),
-}
-SESSIONS: dict[str, str] = {}  # session_token -> customer_id
-
-
 def digits_only(spoken: str) -> str:
     """Keep only the digits, since speech-to-text writes a DNI as "30.123.456" or "30 123 456"."""
     return "".join(char for char in spoken if char.isdigit())
-
-
-def find_customer_id(dni: str, card_last4: str) -> str | None:
-    """Return the ID of the customer with this DNI who also holds a card ending in these digits."""
-    return next(
-        (customer_id for customer_id, customer in CUSTOMERS.items() if customer.dni == dni and card_last4 in customer.cards),
-        None,
-    )
-
-
-def verified_customer(session_token: str) -> Customer | None:
-    """Return the customer this session was issued for, or None for a token verify_customer never issued."""
-    customer_id = SESSIONS.get(session_token)
-    return CUSTOMERS.get(customer_id) if customer_id else None
 
 
 def parse_block_reason(raw_reason: str) -> BlockReason | None:
@@ -218,6 +145,16 @@ def parse_block_reason(raw_reason: str) -> BlockReason | None:
 def new_case_id() -> str:
     """A case number short enough to spell out over the phone, e.g. BLQ-7F3A21."""
     return f"BLQ-{secrets.token_hex(3).upper()}"
+
+
+def to_spoken_transaction(row: TransactionRow) -> SpokenTransaction:
+    """Turn a stored movement into the JSON the agent reads: an ISO date and a plain number amount."""
+    return {
+        "id": row["reference"],
+        "date": row["booked_on"].isoformat(),
+        "merchant": row["merchant"],
+        "amount_ars": float(row["amount_ars"]),
+    }
 
 
 def require_tool_secret(x_tool_secret: Annotated[str, Header()] = "") -> None:
@@ -247,45 +184,55 @@ async def log_latency(request: Request, call_next: Callable[[Request], Awaitable
 # through them, because a union of result shapes could drop the keys of the shape it didn't pick.
 @app.post("/tools/verify_customer", response_model=None)
 def verify_customer(body: VerifyRequest) -> VerifyResult:
-    """Check the DNI and card digits, and open a session for the account tools when they match."""
-    if (customer_id := find_customer_id(digits_only(body.dni), digits_only(body.card_last4))) is None:
-        return {"verified": False, "error": "DNI y tarjeta no coinciden"}
-    session_token = secrets.token_urlsafe(16)
-    SESSIONS[session_token] = customer_id
-    return {"verified": True, "session_token": session_token, "first_name": CUSTOMERS[customer_id].first_name}
+    """Check the DNI and card digits, and open a Session for this Call when they match."""
+    with transaction() as conn:
+        if (customer := find_verified_customer(conn, digits_only(body.dni), digits_only(body.card_last4))) is None:
+            return {"verified": False, "error": "DNI y tarjeta no coinciden"}
+        session_token = open_session(conn, customer["id"], body.conversation_id, utc_now())
+    return {"verified": True, "session_token": session_token, "first_name": customer["full_name"].split()[0]}
 
 
 @app.post("/tools/get_balance", response_model=None)
 def get_balance(body: SessionRequest) -> BalanceResult | ToolError:
     """Return the verified customer's balance."""
-    if (customer := verified_customer(body.session_token)) is None:
+    with read_connection() as conn:
+        customer = session_customer(conn, body.session_token, body.conversation_id, utc_now())
+    if customer is None:
         return {"error": NOT_VERIFIED_MESSAGE}
-    return {"balance_ars": customer.balance_ars}
+    return {"balance_ars": float(customer["balance_ars"])}
 
 
 @app.post("/tools/list_transactions", response_model=None)
 def list_transactions(body: TransactionsRequest) -> TransactionsResult | ToolError:
     """Return the verified customer's most recent movements."""
-    if (customer := verified_customer(body.session_token)) is None:
-        return {"error": NOT_VERIFIED_MESSAGE}
     count = max(MIN_TRANSACTIONS, min(body.limit, MAX_TRANSACTIONS))
-    return {"transactions": customer.transactions[:count]}
+    with read_connection() as conn:
+        if (customer := session_customer(conn, body.session_token, body.conversation_id, utc_now())) is None:
+            return {"error": NOT_VERIFIED_MESSAGE}
+        rows = recent_transactions(conn, customer["id"], count)
+    return {"transactions": [to_spoken_transaction(row) for row in rows]}
 
 
 @app.post("/tools/block_card", response_model=None)
 def block_card(body: BlockCardRequest) -> BlockResult | ToolError:
-    """Block one of the verified customer's cards; blocking an already-blocked card is reported, not repeated."""
-    if (customer := verified_customer(body.session_token)) is None:
-        return {"error": NOT_VERIFIED_MESSAGE}
+    """Block one of the verified customer's cards; blocking an already-blocked card is reported, not repeated.
+
+    Everything runs in one transaction with the card row locked, so the checks and the block
+    can't be split by a second request for the same card.
+    """
     card_last4 = digits_only(body.card_last4)
-    if (card := customer.cards.get(card_last4)) is None:
-        return {"error": f"la tarjeta terminada en {card_last4} no es del cliente"}
-    if (reason := parse_block_reason(body.reason)) is None:
-        return {"error": f"motivo inválido {body.reason!r}, usar uno de: {', '.join(BlockReason)}"}
-    if card.status == CardStatus.BLOCKED:
-        return {"status": BlockOutcome.ALREADY_BLOCKED}
-    card.status = CardStatus.BLOCKED
-    case_id = new_case_id()
+    with transaction() as conn:
+        now = utc_now()
+        if (customer := session_customer(conn, body.session_token, body.conversation_id, now)) is None:
+            return {"error": NOT_VERIFIED_MESSAGE}
+        if (card := lock_card(conn, customer["id"], card_last4)) is None:
+            return {"error": f"la tarjeta terminada en {card_last4} no es del cliente"}
+        if (reason := parse_block_reason(body.reason)) is None:
+            return {"error": f"motivo inválido {body.reason!r}, usar uno de: {', '.join(BlockReason)}"}
+        if card["status"] == CardStatus.BLOCKED:
+            return {"status": BlockOutcome.ALREADY_BLOCKED}
+        case_id = new_case_id()
+        record_block(conn, card["id"], reason, case_id, now)
     # Audit line for the one irreversible action; the DNI stays out of the log.
     LOG.info("blocked card *%s reason=%s case=%s", card_last4, reason, case_id)
     return {"status": BlockOutcome.BLOCKED, "case_id": case_id}

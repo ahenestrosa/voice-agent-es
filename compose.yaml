@@ -1,0 +1,26 @@
+# Local MySQL for the fake bank backend. Start with `docker compose up -d`.
+# Passwords come from .env (see .env.example); they protect a local demo database only.
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: bank
+      MYSQL_USER: bank
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    ports:
+      # 3307 on the host, so it can't clash with a MySQL already installed on 3306.
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # Runs once, on the first start of an empty volume: creates the database the tests use.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  mysql-data:

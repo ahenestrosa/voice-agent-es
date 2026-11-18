@@ -5,21 +5,29 @@ A Rioplatense-Spanish phone support agent for a (fake) Argentine bank, built on 
 The repo has three parts:
 
 - **`agent/`**: the agent as code. That's the system prompt (in Spanish, written for voice), the first message, and the webhook tool definitions.
-- **`backend/`**: a FastAPI service that plays the bank's core system. The agent calls it as webhook tools.
+- **`backend/`**: a FastAPI service that plays the bank's core system, on MySQL 8 (Docker Compose). The agent calls it as webhook tools.
 - **`evals/` + `scripts/run_evals.py`**: nine behavioral tests run on the ElevenLabs agent-testing API. They check tool calls, single replies and full simulated calls.
+
+The words the code and the docs use (Caller, Customer, Call, Verification, Session) are defined in [`GLOSSARY.md`](GLOSSARY.md).
 
 ```
  caller ──voice──▶ ElevenLabs Agent (ASR → LLM → TTS, es-AR)
-                        │  webhook tools (POST + X-Tool-Secret)
+                        │  webhook tools (POST + X-Tool-Secret + conversation_id)
                         ▼
                   backend/app.py  (FastAPI)
-                  verify_customer ─▶ session_token
-                  get_balance / list_transactions / block_card (require session_token)
+                  verify_customer ─▶ session_token, bound to this Call
+                  get_balance / list_transactions / block_card (require session_token + same Call)
+                        │  SQLAlchemy Core
+                        ▼
+                  MySQL 8: customers, cards, transactions, sessions, card_blocks
 ```
 
 ## Design decisions
 
 - **The backend enforces identity, not the prompt.** `verify_customer` returns an opaque `session_token`. Every account tool requires it and none of them accepts a customer ID. The prompt says "verify first", but if a jailbreak gets past the prompt, the agent still can't read an account the caller didn't verify. `tests/test_backend.py` checks that a guessed ID gets nothing.
+- **A Session lives for one Call.** Every tool request carries the ElevenLabs conversation ID, filled by the platform from `system__conversation_id`; the LLM never sees it and can't fake it. A token only works in the Call that verified it, with a 30-minute expiry as a backstop, because the backend never hears the hang-up. A token copied out of a transcript opens nothing in another Call.
+- **MySQL, not SQLite, on purpose.** Persistence alone would only need SQLite. MySQL is here so the backend talks to a database the way a real core-banking integration does: a server, a schema with migrations, transactions and row locks. `block_card` locks the card row (`SELECT … FOR UPDATE`), so two simultaneous blocks can't give one card two case numbers. Money is `DECIMAL(15, 2)`, never a float.
+- **One schema, no drift.** The tables are SQLAlchemy Core in `backend/tables.py`; Alembic migrations are generated from them, and `tests/test_migrations.py` fails if the two ever disagree. The test database is built by the real migrations, so a broken migration fails the tests first.
 - **Speech-to-text output is messy, so tool inputs get cleaned up.** People say "treinta millones ciento veintitrés mil…" or "30.123.456". The backend strips everything except digits from the DNI and card digits before matching.
 - **Tool errors come back as data, not HTTP errors.** For example `{"error": "DNI y tarjeta no coinciden"}`. That way the LLM can explain the problem to the caller instead of the call failing.
 - **Destructive actions need a spoken "sí".** `block_card` can't be undone over the phone. The prompt asks for explicit confirmation, and an eval checks for it.
@@ -30,9 +38,14 @@ The repo has three parts:
 
 ```bash
 uv sync --group dev
-cp .env.example .env            # fill ELEVENLABS_API_KEY and TOOL_SECRET
-uv run pytest -q                # backend + script tests (no network)
-uvx ruff check backend scripts tests
+cp .env.example .env            # fill ELEVENLABS_API_KEY, TOOL_SECRET and the MySQL passwords/URLs
+
+docker compose up -d                       # MySQL 8 on localhost:3307, plus an empty bank_test database
+uv run alembic upgrade head                # create the schema in the demo database
+uv run python -m scripts.seed_db           # load (or reset) the two demo customers
+
+uv run --group dev pytest -q    # backend tests run against bank_test (skipped if MySQL is down); the rest need no network
+uvx ruff check backend scripts tests migrations
 uvx pyright --pythonpath .venv/bin/python   # strict mode, configured in pyproject.toml
 
 # expose the backend publicly so the agent can reach it
@@ -46,7 +59,7 @@ uv run python -m scripts.run_evals --sim        # full suite incl. simulated cal
 uv run python -m scripts.run_evals --sim --repeat 5   # 5 runs per test to measure flakiness (5x the credits)
 ```
 
-Then open the agent in the ElevenLabs dashboard and call it. Test identities:
+Then open the agent in the ElevenLabs dashboard, click **Preview** and call it. After a demo call blocks a card, `uv run python -m scripts.seed_db` resets it. Test identities:
 
 | Name | DNI | Card |
 |---|---|---|
@@ -74,8 +87,8 @@ The latest results are in `evals/results/latest.md`.
 ## What I'd change for a real bank deployment
 
 - **Secrets:** move `X-Tool-Secret` to a workspace secret reference or an auth connection, and add request signing.
-- **Sessions:** make tokens expire with the call, tie each one to the conversation ID, and keep sessions in Redis instead of process memory.
+- **Sessions:** end a Session the moment its Call ends, from ElevenLabs' post-call webhook, instead of waiting for the 30-minute backstop.
 - **Telephony:** connect a real number over SIP trunking or Twilio. Add a transfer-to-human tool instead of reading out the 0800 number.
-- **Compliance:** redact the DNI from transcripts, keep an audit log of every `block_card`, and add a second verification factor such as an OTP to the registered phone.
+- **Compliance:** redact the DNI from transcripts, and add a second verification factor such as an OTP to the registered phone. Every block is already on record in `card_blocks`, with its case number and reason.
 - **Latency:** track how long each tool takes (the backend already logs it) against a turn budget. Spoken turns feel broken above ~1 s of silence.
 - **Evals in CI:** run `run_evals --repeat 5` on every prompt or tool change, and fail the build if the pass rate drops.
