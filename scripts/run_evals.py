@@ -60,11 +60,20 @@ class Speaker(StrEnum):
     USER = auto()
 
 
+class ScriptedToolCall(TypedDict):
+    """A tool call the agent already made earlier in the scripted conversation, with the result it got."""
+
+    tool: str
+    params: JsonObject
+    result: JsonObject
+
+
 class ChatTurn(TypedDict):
     """One scripted turn of the conversation that leads up to the tested reply."""
 
     role: Speaker
     message: str
+    tool_call: NotRequired[ScriptedToolCall]
 
 
 class ToolCallCheck(TypedDict):
@@ -119,12 +128,42 @@ def resolve_tool_id(tool_ids: dict[str, str], name: str) -> str:
     return tool_id
 
 
-def build_chat_history(turns: list[ChatTurn]) -> list[JsonObject]:
+def build_tool_exchange(call: ScriptedToolCall, request_id: str, tool_ids: dict[str, str]) -> JsonObject:
+    """API fields for a scripted tool call and its result, paired by a shared request ID.
+
+    Without a real call and result in the history, a line like "ya te verifiqué" is only a claim,
+    and an agent that follows its prompt rightly asks for the DNI again instead of moving on.
+    """
+    tool_name = call["tool"]
+    tool_id = resolve_tool_id(tool_ids, tool_name)
+    tool_call = {
+        "type": "webhook",
+        "request_id": request_id,
+        "tool_name": tool_name,
+        "tool_id": tool_id,
+        "params_as_json": json.dumps(call["params"], ensure_ascii=False),
+        "tool_has_been_called": True,
+    }
+    tool_result = {
+        "type": "webhook",
+        "request_id": request_id,
+        "tool_name": tool_name,
+        "result_value": json.dumps(call["result"], ensure_ascii=False),
+        "is_error": False,
+        "tool_has_been_called": True,
+    }
+    return {"tool_calls": [tool_call], "tool_results": [tool_result]}
+
+
+def build_chat_history(turns: list[ChatTurn], tool_ids: dict[str, str]) -> list[JsonObject]:
     """Turn the scripted turns into the API's chat history, with one timestamp per turn."""
-    return [
-        {"role": Speaker(turn["role"]), "message": turn["message"], "time_in_call_secs": index * SECS_PER_TURN}
-        for index, turn in enumerate(turns)
-    ]
+    history: list[JsonObject] = []
+    for index, turn in enumerate(turns):
+        entry: JsonObject = {"role": Speaker(turn["role"]), "message": turn["message"], "time_in_call_secs": index * SECS_PER_TURN}
+        if (call := turn.get("tool_call")) is not None:
+            entry |= build_tool_exchange(call, f"call_{index}", tool_ids)
+        history.append(entry)
+    return history
 
 
 def tool_test_fields(test: EvalTest, tool_ids: dict[str, str]) -> JsonObject:
@@ -184,7 +223,7 @@ def build_test_payload(test: EvalTest, tool_ids: dict[str, str]) -> JsonObject:
     return {
         "name": test["name"],
         "type": eval_type,
-        "chat_history": build_chat_history(test.get("chat_history", [])),
+        "chat_history": build_chat_history(test.get("chat_history", []), tool_ids),
         **TYPE_FIELDS[eval_type](test, tool_ids),
     }
 

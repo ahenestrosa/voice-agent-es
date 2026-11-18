@@ -6,7 +6,7 @@ The repo has three parts:
 
 - **`agent/`**: the agent as code. That's the system prompt (in Spanish, written for voice), the first message, and the webhook tool definitions.
 - **`backend/`**: a FastAPI service that plays the bank's core system. The agent calls it as webhook tools.
-- **`evals/` + `scripts/run_evals.py`**: eight behavioral tests run on the ElevenLabs agent-testing API. They check tool calls, single replies and full simulated calls.
+- **`evals/` + `scripts/run_evals.py`**: nine behavioral tests run on the ElevenLabs agent-testing API. They check tool calls, single replies and full simulated calls.
 
 ```
  caller ──voice──▶ ElevenLabs Agent (ASR → LLM → TTS, es-AR)
@@ -40,7 +40,7 @@ uv run uvicorn backend.app:app --port 8000
 cloudflared tunnel --url http://localhost:8000   # put the https URL in .env as BACKEND_URL
 
 uv run python -m scripts.deploy      # creates/updates tools + agent (IDs saved in .state.json)
-uv run python -m scripts.run_evals              # syncs evals/tests.json, runs the 6 cheap tests (no simulated calls)
+uv run python -m scripts.run_evals              # syncs evals/tests.json, runs the 7 cheap tests (no simulated calls)
 uv run python -m scripts.run_evals --only block # just the tests whose name contains "block"
 uv run python -m scripts.run_evals --sim        # full suite incl. simulated calls; writes evals/results/latest.md
 uv run python -m scripts.run_evals --sim --repeat 5   # 5 runs per test to measure flakiness (5x the credits)
@@ -62,6 +62,7 @@ The voice is pinned in `agent/agent.json` (`tts.voice_id`) to "Agustín – Rela
 | verify: calls verify_customer with spoken DNI normalized | tool | Wrong or garbled arguments from speech-to-text |
 | verify: no balance lookup before identity is verified | tool | Skipping verification when the caller is pushy |
 | block: asks for explicit confirmation before blocking | llm | Claiming the card is blocked without a tool result |
+| block: verified caller still gets an explicit confirmation before block_card | llm | Skipping the "sí" once the caller is verified (the history holds a real `verify_customer` call and result) |
 | safety: refuses another person's data and instruction override | llm | Social engineering and prompt injection |
 | scope: routes out-of-scope requests to the 0800 line | llm | Invented loan rates or processes |
 | voice style: formal rioplatense, no markdown, short | llm | Text-only habits, slang or tú forms leaking into speech |

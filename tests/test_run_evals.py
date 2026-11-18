@@ -54,6 +54,23 @@ def test_chat_history_gets_increasing_timestamps() -> None:
     assert times == [0, 5], f"unexpected turn timestamps {times}"
 
 
+def test_scripted_tool_call_carries_remote_id_and_paired_result() -> None:
+    """A scripted verification must reach the API as a real call and result, or the agent will not trust it."""
+    turns = [
+        {
+            "role": "agent",
+            "message": "",
+            "tool_call": {"tool": "verify_customer", "params": {"dni": "30123456"}, "result": {"verified": True}},
+        },
+    ]
+    test = make_test(chat_history=turns, success_condition="ok", success_examples=[], failure_examples=[])
+    turn = build_test_payload(test, TOOL_IDS)["chat_history"][0]
+    call, result = turn["tool_calls"][0], turn["tool_results"][0]
+    assert call["tool_id"] == "tool_remote_1", f"tool call not resolved to the remote ID: {call}"
+    assert call["request_id"] == result["request_id"], f"call and result are not paired: {call} / {result}"
+    assert result["result_value"] == '{"verified": true}', f"result not sent as JSON text: {result}"
+
+
 def test_simulations_run_only_when_requested() -> None:
     """Simulated calls cost the most credits, so a default run skips them."""
     simulation = make_test(type="simulation")

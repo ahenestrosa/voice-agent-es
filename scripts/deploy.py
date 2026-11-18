@@ -86,8 +86,9 @@ def main() -> None:
     if not BACKEND_URL or not TOOL_SECRET:
         raise SystemExit(f"set BACKEND_URL and TOOL_SECRET in {ROOT / '.env'}")
 
-    # 2. Deploy the tools first, because the agent references them by ID.
     state = load_state()
+
+    # 2. Deploy the tools first, because the agent references them by ID.
     tool_ids = deploy_tools(state)
 
     # 3. Attach only this deploy's tools, so a tool removed from tools.json also leaves the agent.
