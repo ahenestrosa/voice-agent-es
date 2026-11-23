@@ -1,4 +1,4 @@
-"""ElevenLabs REST helper, the CLI registries that hold the deployed agent and tool IDs, and the eval state file."""
+"""ElevenLabs REST helper, and readers for the CLI registries that hold the deployed agent and tool IDs."""
 
 # Standard library
 import json
@@ -16,8 +16,6 @@ ROOT = Path(__file__).resolve().parent.parent
 # Written by `elevenlabs agents pull/push` and `elevenlabs tools pull/push`; they map configs to remote IDs.
 AGENTS_REGISTRY_PATH = ROOT / "agents.json"
 TOOLS_REGISTRY_PATH = ROOT / "tools.json"
-# Remote IDs of the synced eval tests; the CLI does not manage these yet.
-STATE_PATH = ROOT / ".state.json"
 
 load_dotenv(ROOT / ".env")
 CLIENT = httpx.Client(
@@ -36,12 +34,7 @@ class HttpMethod(StrEnum):
     GET = "GET"
     POST = "POST"
     PUT = "PUT"
-
-
-class EvalState(TypedDict):
-    """Contents of .state.json: the remote ID of each eval test, keyed by its name in evals/tests.json."""
-
-    tests: dict[str, str]
+    PATCH = "PATCH"
 
 
 class AgentEntry(TypedDict):
@@ -104,15 +97,3 @@ def deployed_tool_ids(registry_path: Path = TOOLS_REGISTRY_PATH) -> dict[str, st
     """Map each tool's name, read from its config file, to the remote ID tools.json records for it."""
     tools = cast(list[ToolEntry], json.loads(registry_path.read_text())["tools"])
     return {json.loads((registry_path.parent / tool["config"]).read_text())["name"]: tool["id"] for tool in tools}
-
-
-def load_state() -> EvalState:
-    """Read .state.json, or start empty before the first sync; keys other than `tests` are ignored."""
-    if not STATE_PATH.exists():
-        return {"tests": {}}
-    return {"tests": json.loads(STATE_PATH.read_text()).get("tests", {})}
-
-
-def save_state(state: EvalState) -> None:
-    """Write .state.json."""
-    STATE_PATH.write_text(json.dumps(state, indent=2))

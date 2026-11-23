@@ -1,0 +1,75 @@
+# Checks every pull request and every push to main. On a pull request it also pushes the PR's
+# agent config to its own ElevenLabs branch (pr-<number>) and runs the cheap evals there, so the
+# main branch that live calls use is never touched. Deploying is a separate, manual workflow.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to the same PR cancels the older run, so only the latest commit spends eval credits.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          # Throwaway credentials: the container lives only as long as this job.
+          MYSQL_ROOT_PASSWORD: ci-root
+          MYSQL_DATABASE: bank_test
+          MYSQL_USER: bank
+          MYSQL_PASSWORD: ci
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      TEST_DATABASE_URL: mysql+pymysql://bank:ci@127.0.0.1:3307/bank_test?charset=utf8mb4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install dependencies
+        run: uv sync --group dev
+      # tests/conftest.py fails instead of skipping under CI, so a broken MySQL service fails here.
+      - name: Tests
+        run: uv run --group dev pytest -q
+      - name: Lint
+        run: uvx ruff check backend scripts tests migrations
+      - name: Type check
+        run: uvx pyright --pythonpath .venv/bin/python
+
+  evals:
+    if: github.event_name == 'pull_request'
+    needs: checks
+    runs-on: ubuntu-latest
+    env:
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      EVAL_BRANCH: pr-${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install dependencies
+        run: uv sync
+      - name: Install the ElevenLabs CLI
+        run: npm install --global @elevenlabs/cli@1.12.2
+      # The CLI refuses to push to a branch that does not exist; this creates or unarchives it.
+      - name: Prepare the PR's agent branch
+        run: uv run python -m scripts.agent_branch ensure "$EVAL_BRANCH"
+      # Pushes only the agent config (prompt, model, voice, tool list); tools are shared by all
+      # branches, so they are left alone and reach ElevenLabs only through the deploy workflow.
+      # A block scalar, because in a plain YAML value " #" starts a comment and cuts the command off.
+      - name: Push the PR's agent config to its branch
+        run: |
+          elevenlabs agents push --branch "$EVAL_BRANCH" --version-description "PR #${{ github.event.pull_request.number }} at ${{ github.event.pull_request.head.sha }}"
+      # The 7 tool and LLM-judged tests; simulated calls cost most of the credits and stay manual.
+      - name: Run the evals on the branch
+        run: uv run python -m scripts.run_evals --branch "$EVAL_BRANCH"

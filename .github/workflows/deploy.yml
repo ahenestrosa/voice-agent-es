@@ -1,0 +1,30 @@
+# Pushes the tools and the agent from main to ElevenLabs. Runs only when started by hand from
+# the Actions tab, so merging a PR never changes the live agent by itself.
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+# Two deploys at once could interleave tool and agent pushes; the second waits for the first.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only main is deployable, so the live agent always matches a commit that passed CI.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the ElevenLabs CLI
+        run: npm install --global @elevenlabs/cli@1.12.2
+      # Tools first: the agent's tool_ids must point at tools already in their final shape.
+      - name: Push the tools
+        run: elevenlabs tools push
+      - name: Push the agent to main
+        run: elevenlabs agents push --version-description "Deploy of ${{ github.sha }}"
+      - name: Show what is deployed
+        run: elevenlabs agents status
