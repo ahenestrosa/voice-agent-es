@@ -1,0 +1,22 @@
+{
+  "type": "webhook",
+  "name": "block_card",
+  "description": "Bloquea una tarjeta del cliente verificado. Solo llamar después de que el cliente confirmó explícitamente el bloqueo.",
+  "response_timeout_secs": 10,
+  "api_schema": {
+    "url": "https://{{system__env_backend_host}}/tools/block_card",
+    "method": "POST",
+    "request_headers": {"X-Tool-Secret": {"env_var_label": "tool_secret"}},
+    "request_body_schema": {
+      "type": "object",
+      "description": "Tarjeta a bloquear y motivo.",
+      "properties": {
+        "session_token": {"type": "string", "description": "session_token devuelto por verify_customer en esta llamada."},
+        "card_last4": {"type": "string", "description": "Últimos 4 dígitos de la tarjeta a bloquear."},
+        "reason": {"type": "string", "enum": ["lost", "stolen", "fraud"], "description": "lost = pérdida, stolen = robo, fraud = movimientos no reconocidos."},
+        "conversation_id": {"type": "string", "dynamic_variable": "system__conversation_id"}
+      },
+      "required": ["session_token", "card_last4", "reason", "conversation_id"]
+    }
+  }
+}

@@ -1,6 +1,6 @@
 """Sync evals/tests.json to ElevenLabs agent tests, run them against the deployed agent, report results.
 
-Tests name their tools locally; the remote IDs come from .state.json, written by scripts.deploy.
+Tests name their tools locally; the remote IDs come from the CLI's tools.json and agents.json.
 Simulated calls cost most of the credits, so they only run with --sim. evals/results/latest.md
 is the committed record, so it is only rewritten when the full suite ran.
 
@@ -20,11 +20,13 @@ from typing import Any, NotRequired, TypedDict, cast
 from scripts.elevenlabs_api import (
     ROOT,
     TEST,
-    DeployState,
+    EvalState,
     HttpMethod,
     JsonObject,
     call_api,
     create_or_update,
+    deployed_agent_id,
+    deployed_tool_ids,
     load_state,
     save_state,
 )
@@ -124,7 +126,7 @@ class SimulationEvalTest(EvalTest):
 def resolve_tool_id(tool_ids: dict[str, str], name: str) -> str:
     """Return the remote ID of a tool named in a test, failing with the name if it was never deployed."""
     if (tool_id := tool_ids.get(name)) is None:
-        raise SystemExit(f"test references tool {name!r}, which is not deployed; run: uv run python -m scripts.deploy")
+        raise SystemExit(f"test references tool {name!r}, which is not in tools.json; run: elevenlabs tools push")
     return tool_id
 
 
@@ -235,7 +237,7 @@ def is_selected(test: EvalTest, only: str | None, sim: bool) -> bool:
     return sim or EvalType(test["type"]) != EvalType.SIMULATION
 
 
-def sync_tests(state: DeployState) -> list[tuple[EvalTest, str]]:
+def sync_tests(state: EvalState, tool_ids: dict[str, str]) -> list[tuple[EvalTest, str]]:
     """Create or update every test on ElevenLabs and return (test, remote ID) pairs.
 
     Syncing is free, since no LLM runs, so all tests are synced even when only some will run.
@@ -245,7 +247,7 @@ def sync_tests(state: DeployState) -> list[tuple[EvalTest, str]]:
     synced: list[tuple[EvalTest, str]] = []
     for test in tests:
         existing_id = state["tests"].get(test["name"])
-        state["tests"][test["name"]] = create_or_update(TEST, existing_id, build_test_payload(test, state["tools"]))
+        state["tests"][test["name"]] = create_or_update(TEST, existing_id, build_test_payload(test, tool_ids))
         save_state(state)
         synced.append((test, state["tests"][test["name"]]))
     return synced
@@ -312,7 +314,7 @@ def main(only: str | None, sim: bool, repeat: int) -> bool:
     """Run the selected tests against the deployed agent and report; return whether all passed.
 
     How it works:
-    1. Load the deployed agent's ID, since tests run against what is deployed, not the local files.
+    1. Load the deployed agent and tool IDs from the CLI registries; tests run against what is pushed.
     2. Sync every test in evals/tests.json to ElevenLabs.
     3. Pick the tests to run from --only and --sim.
     4. Start one invocation for them and wait until every run finishes.
@@ -323,13 +325,12 @@ def main(only: str | None, sim: bool, repeat: int) -> bool:
         sim: Also run the simulated-call tests, which cost most of the credits.
         repeat: Runs per test (1-20). More runs expose flaky tests; credits scale with it.
     """
-    # 1. Without a deployed agent there is nothing to test.
-    state = load_state()
-    if (agent_id := state.get("agent_id")) is None:
-        raise SystemExit("no agent yet, run: uv run python -m scripts.deploy")
+    # 1. Tests reference tools by name, so the IDs must be resolved before anything is synced.
+    agent_id = deployed_agent_id()
+    tool_ids = deployed_tool_ids()
 
     # 2. Sync everything, so the remote suite always matches the local file.
-    synced = sync_tests(state)
+    synced = sync_tests(load_state(), tool_ids)
 
     # 3. Select by name or type; an empty selection is a typo in --only.
     test_ids = [test_id for test, test_id in synced if is_selected(test, only, sim)]

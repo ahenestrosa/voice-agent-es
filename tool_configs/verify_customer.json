@@ -1,0 +1,21 @@
+{
+  "type": "webhook",
+  "name": "verify_customer",
+  "description": "Verifica la identidad del cliente con su DNI y los últimos 4 dígitos de una de sus tarjetas. Devuelve verified, session_token y first_name. Obligatorio antes de cualquier otra herramienta.",
+  "response_timeout_secs": 10,
+  "api_schema": {
+    "url": "https://{{system__env_backend_host}}/tools/verify_customer",
+    "method": "POST",
+    "request_headers": {"X-Tool-Secret": {"env_var_label": "tool_secret"}},
+    "request_body_schema": {
+      "type": "object",
+      "description": "Datos de identificación dichos por el cliente.",
+      "properties": {
+        "dni": {"type": "string", "description": "DNI del cliente, solo dígitos, sin puntos."},
+        "card_last4": {"type": "string", "description": "Últimos 4 dígitos de una tarjeta del cliente."},
+        "conversation_id": {"type": "string", "dynamic_variable": "system__conversation_id"}
+      },
+      "required": ["dni", "card_last4", "conversation_id"]
+    }
+  }
+}

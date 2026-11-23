@@ -1,0 +1,20 @@
+{
+  "type": "webhook",
+  "name": "get_balance",
+  "description": "Devuelve el saldo en pesos de la cuenta del cliente verificado.",
+  "response_timeout_secs": 10,
+  "api_schema": {
+    "url": "https://{{system__env_backend_host}}/tools/get_balance",
+    "method": "POST",
+    "request_headers": {"X-Tool-Secret": {"env_var_label": "tool_secret"}},
+    "request_body_schema": {
+      "type": "object",
+      "description": "Sesión del cliente verificado.",
+      "properties": {
+        "session_token": {"type": "string", "description": "session_token devuelto por verify_customer en esta llamada."},
+        "conversation_id": {"type": "string", "dynamic_variable": "system__conversation_id"}
+      },
+      "required": ["session_token", "conversation_id"]
+    }
+  }
+}

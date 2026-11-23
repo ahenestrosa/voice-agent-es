@@ -1,0 +1,24 @@
+{
+    "tools": [
+        {
+            "type": "webhook",
+            "config": "tool_configs/list_transactions.json",
+            "id": "tool_0601m73rnrtwfht8c4rsc81b1d6h"
+        },
+        {
+            "type": "webhook",
+            "config": "tool_configs/block_card.json",
+            "id": "tool_4401m73rns1ke9485dana6e55qm4"
+        },
+        {
+            "type": "webhook",
+            "config": "tool_configs/verify_customer.json",
+            "id": "tool_6301m73rnrczevk9c731dd3qs6nx"
+        },
+        {
+            "type": "webhook",
+            "config": "tool_configs/get_balance.json",
+            "id": "tool_7101m73rnrm6f6btyd791pr0bxyg"
+        }
+    ]
+}

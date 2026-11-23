@@ -1,0 +1,10 @@
+{
+    "agents": [
+        {
+            "config": "agent_configs/banco-austral.yaml",
+            "id": "agent_6901m73rns8berdvzfs2rfwnq9vw",
+            "branch_id": "agtbrch_1101m73rnth3fe1tk8fa3ythfsft",
+            "version_id": "agtvrsn_0901m84z4vecffb8csbdma6j7kw7"
+        }
+    ]
+}
