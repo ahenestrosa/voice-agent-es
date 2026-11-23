@@ -66,8 +66,10 @@ jobs:
         run: uv run python -m scripts.agent_branch ensure "$EVAL_BRANCH"
       # Pushes only the agent config (prompt, model, voice, tool list); tools are shared by all
       # branches, so they are left alone and reach ElevenLabs only through the deploy workflow.
+      # A block scalar, because in a plain YAML value " #" starts a comment and cuts the command off.
       - name: Push the PR's agent config to its branch
-        run: elevenlabs agents push --branch "$EVAL_BRANCH" --version-description "PR #${{ github.event.pull_request.number }} at ${{ github.event.pull_request.head.sha }}"
+        run: |
+          elevenlabs agents push --branch "$EVAL_BRANCH" --version-description "PR #${{ github.event.pull_request.number }} at ${{ github.event.pull_request.head.sha }}"
       # The 7 tool and LLM-judged tests; simulated calls cost most of the credits and stay manual.
       - name: Run the evals on the branch
         run: uv run python -m scripts.run_evals --branch "$EVAL_BRANCH"
