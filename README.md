@@ -95,6 +95,18 @@ The voice is pinned in `agent_configs/banco-austral.yaml` (`tts.voice_id`) to "A
 
 The latest results are in `evals/results/latest.md`.
 
+## CI and deploys
+
+Three GitHub Actions workflows, all of which need an `ELEVENLABS_API_KEY` repository secret:
+
+| Workflow | Runs on | What it does |
+|---|---|---|
+| `ci.yml` | Every PR and push to `main` | Tests against a MySQL service, ruff and pyright. On a PR it also pushes the agent config to its own ElevenLabs branch, `pr-<number>`, and runs the 7 cheap evals there. The PR fails if any eval fails. |
+| `eval-branch-cleanup.yml` | PR merged or closed | Archives the PR's branch. |
+| `deploy.yml` | Manual, from the Actions tab, `main` only | Pushes the tools, then the agent, to ElevenLabs. Merging never changes the live agent by itself. |
+
+A PR branch holds its own copy of the agent config, so you can also make a Preview call on it from the dashboard before merging. Tools are shared by every branch, so a PR's tool config changes are not tested in isolation; they reach ElevenLabs only through the deploy.
+
 ## What I'd change for a real bank deployment
 
 - **Secrets:** replace the shared `X-Tool-Secret` with an auth connection (bearer or mTLS), and add request signing.
@@ -102,4 +114,4 @@ The latest results are in `evals/results/latest.md`.
 - **Telephony:** connect a real number over SIP trunking or Twilio. Add a transfer-to-human tool instead of reading out the 0800 number.
 - **Compliance:** redact the DNI from transcripts, and add a second verification factor such as an OTP to the registered phone. Every block is already on record in `card_blocks`, with its case number and reason.
 - **Latency:** track how long each tool takes (the backend already logs it) against a turn budget. Spoken turns feel broken above ~1 s of silence.
-- **Evals in CI:** run `run_evals --repeat 5` on every prompt or tool change, and fail the build if the pass rate drops.
+- **Evals in CI:** run with `--repeat 5` and gate on a pass rate rather than on every single run, so one flaky LLM judgment doesn't block a PR.

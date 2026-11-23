@@ -7,7 +7,14 @@ from typing import Any, cast
 import pytest
 
 # Local
-from scripts.run_evals import EvalTest, build_test_payload, is_selected, render_report
+from scripts.run_evals import (
+    EvalTest,
+    build_run_request,
+    build_test_payload,
+    is_selected,
+    remote_test_ids,
+    render_report,
+)
 
 TOOL_IDS = {"verify_customer": "tool_remote_1", "block_card": "tool_remote_2"}
 
@@ -97,3 +104,23 @@ def test_report_counts_passes_and_keeps_the_table_intact() -> None:
     report = render_report(invocation)
     assert "**1/2 passed**" in report, f"wrong pass count in report:\n{report}"
     assert "| a |  | passed | ok / fine really |" in report, f"reason not flattened into one cell:\n{report}"
+
+
+def test_remote_tests_are_matched_by_name() -> None:
+    """CI has no local state, so it finds existing tests by name; a miss would duplicate the suite."""
+    test_list = {"tests": [{"name": "scope", "id": "test_1"}], "has_more": False}
+    assert remote_test_ids(test_list) == {"scope": "test_1"}, "remote tests not mapped by name"
+
+
+def test_remote_test_list_with_more_pages_fails() -> None:
+    """Tests on an unread page would look missing and get created again, so a second page must stop the run."""
+    with pytest.raises(SystemExit, match="more than one page"):
+        remote_test_ids({"tests": [], "has_more": True})
+
+
+def test_run_request_targets_the_branch_only_when_given() -> None:
+    """Without branch_id, ElevenLabs tests main, so a PR run that drops it would test the live agent."""
+    on_branch = build_run_request(["test_1"], repeat=1, branch_id="agtbrch_pr")
+    on_main = build_run_request(["test_1"], repeat=1, branch_id=None)
+    assert on_branch["branch_id"] == "agtbrch_pr", f"branch run lost its branch_id: {on_branch}"
+    assert "branch_id" not in on_main, f"main run carries a branch_id: {on_main}"

@@ -1,10 +1,11 @@
 """Sync evals/tests.json to ElevenLabs agent tests, run them against the deployed agent, report results.
 
 Tests name their tools locally; the remote IDs come from the CLI's tools.json and agents.json.
+Remote tests are matched to local ones by name, so a laptop and CI update the same tests.
 Simulated calls cost most of the credits, so they only run with --sim. evals/results/latest.md
 is the committed record, so it is only rewritten when the full suite ran.
 
-Usage: uv run python -m scripts.run_evals [--sim] [--only TEXT] [--repeat N]
+Usage: uv run python -m scripts.run_evals [--sim] [--only TEXT] [--repeat N] [--branch NAME]
 """
 
 # Standard library
@@ -17,18 +18,16 @@ from enum import StrEnum, auto
 from typing import Any, NotRequired, TypedDict, cast
 
 # Local
+from scripts.agent_branch import active_branch_id
 from scripts.elevenlabs_api import (
     ROOT,
     TEST,
-    EvalState,
     HttpMethod,
     JsonObject,
     call_api,
     create_or_update,
     deployed_agent_id,
     deployed_tool_ids,
-    load_state,
-    save_state,
 )
 
 TESTS_PATH = ROOT / "evals/tests.json"
@@ -237,20 +236,33 @@ def is_selected(test: EvalTest, only: str | None, sim: bool) -> bool:
     return sim or EvalType(test["type"]) != EvalType.SIMULATION
 
 
-def sync_tests(state: EvalState, tool_ids: dict[str, str]) -> list[tuple[EvalTest, str]]:
+def remote_test_ids(test_list: JsonObject) -> dict[str, str]:
+    """Map each remote test's name to its ID, from the reply of the test-list endpoint.
+
+    Matching by name, rather than through a local state file, is what lets CI update the tests a
+    laptop created: CI starts from a fresh checkout, so a state file would make it duplicate the
+    whole suite on every run.
+    """
+    if test_list.get("has_more"):
+        raise SystemExit("the workspace has more than one page of agent tests; remote_test_ids reads only the first")
+    return {test["name"]: test["id"] for test in test_list["tests"]}
+
+
+def sync_tests(tool_ids: dict[str, str]) -> list[tuple[EvalTest, str]]:
     """Create or update every test on ElevenLabs and return (test, remote ID) pairs.
 
     Syncing is free, since no LLM runs, so all tests are synced even when only some will run.
     That keeps the dashboard's copy of the suite identical to evals/tests.json.
     """
     tests = cast(list[EvalTest], json.loads(TESTS_PATH.read_text()))
-    synced: list[tuple[EvalTest, str]] = []
-    for test in tests:
-        existing_id = state["tests"].get(test["name"])
-        state["tests"][test["name"]] = create_or_update(TEST, existing_id, build_test_payload(test, tool_ids))
-        save_state(state)
-        synced.append((test, state["tests"][test["name"]]))
-    return synced
+    existing_ids = remote_test_ids(call_api(HttpMethod.GET, "/v1/convai/agent-testing"))
+    return [(test, create_or_update(TEST, existing_ids.get(test["name"]), build_test_payload(test, tool_ids))) for test in tests]
+
+
+def build_run_request(test_ids: list[str], repeat: int, branch_id: str | None) -> JsonObject:
+    """The run-tests body; without a branch ID, ElevenLabs tests the main branch that live calls use."""
+    run_request: JsonObject = {"tests": [{"test_id": test_id} for test_id in test_ids], "repeat_count": repeat}
+    return run_request | ({"branch_id": branch_id} if branch_id else {})
 
 
 def wait_for_invocation(invocation_id: str) -> JsonObject:
@@ -310,11 +322,12 @@ def save_results(invocation: JsonObject, report: str, full_suite: bool) -> None:
     (RESULTS_DIR / "latest.md").write_text(report)
 
 
-def main(only: str | None, sim: bool, repeat: int) -> bool:
+def main(only: str | None, sim: bool, repeat: int, branch: str | None) -> bool:
     """Run the selected tests against the deployed agent and report; return whether all passed.
 
     How it works:
-    1. Load the deployed agent and tool IDs from the CLI registries; tests run against what is pushed.
+    1. Load the agent and tool IDs from the CLI registries, and the branch ID when one is named;
+       tests run against what is pushed, not the local files.
     2. Sync every test in evals/tests.json to ElevenLabs.
     3. Pick the tests to run from --only and --sim.
     4. Start one invocation for them and wait until every run finishes.
@@ -324,13 +337,15 @@ def main(only: str | None, sim: bool, repeat: int) -> bool:
         only: Run only tests whose name contains this text, ignoring case. Overrides `sim`.
         sim: Also run the simulated-call tests, which cost most of the credits.
         repeat: Runs per test (1-20). More runs expose flaky tests; credits scale with it.
+        branch: Name of the agent branch to test, e.g. `pr-12` in CI. None tests main.
     """
     # 1. Tests reference tools by name, so the IDs must be resolved before anything is synced.
     agent_id = deployed_agent_id()
     tool_ids = deployed_tool_ids()
+    branch_id = active_branch_id(agent_id, branch) if branch else None
 
     # 2. Sync everything, so the remote suite always matches the local file.
-    synced = sync_tests(load_state(), tool_ids)
+    synced = sync_tests(tool_ids)
 
     # 3. Select by name or type; an empty selection is a typo in --only.
     test_ids = [test_id for test, test_id in synced if is_selected(test, only, sim)]
@@ -339,7 +354,7 @@ def main(only: str | None, sim: bool, repeat: int) -> bool:
     print(f"running {len(test_ids)}/{len(synced)} tests x{repeat}")
 
     # 4. One invocation runs every selected test `repeat` times on ElevenLabs' side.
-    run_request = {"tests": [{"test_id": test_id} for test_id in test_ids], "repeat_count": repeat}
+    run_request = build_run_request(test_ids, repeat, branch_id)
     started = call_api(HttpMethod.POST, f"/v1/convai/agents/{agent_id}/run-tests", run_request)
     invocation = wait_for_invocation(started["id"])
 
@@ -356,8 +371,9 @@ def cli() -> None:
     parser.add_argument("--only", help="run only tests whose name contains this text, e.g. --only e2e")
     parser.add_argument("--sim", action="store_true", help="also run the simulated-call tests (most of the credit cost)")
     parser.add_argument("--repeat", type=int, default=1, help="runs per test (1-20) to measure flakiness; cost scales with it")
+    parser.add_argument("--branch", help="agent branch to test, e.g. pr-12; without it the main branch is tested")
     args = parser.parse_args()
-    raise SystemExit(0 if main(args.only, args.sim, args.repeat) else 1)
+    raise SystemExit(0 if main(args.only, args.sim, args.repeat, args.branch) else 1)
 
 
 if __name__ == "__main__":
