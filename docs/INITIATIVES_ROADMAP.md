@@ -6,12 +6,12 @@ The words used here (Caller, Customer, Call, Verification, Session) are defined 
 
 ## Where we are
 
-- The agent, its prompt and four webhook tools are deployed by a custom script (`scripts/deploy.py`) through the ElevenLabs REST API.
+- The agent and its four webhook tools live in the ElevenLabs CLI layout (`agent_configs/`, `tool_configs/`, `agents.json`, `tools.json`) and are pushed with `elevenlabs agents push` and `elevenlabs tools push`.
 - The FastAPI backend stores the bank in MySQL 8 (Docker Compose). Each Session is bound to its Call through `system__conversation_id`, with a 30-minute expiry.
 - Nine behavioral evals run on the ElevenLabs agent-testing API from `scripts/run_evals.py`.
-- Tests, ruff and pyright run only by hand.
-- The backend reaches ElevenLabs through a cloudflared quick tunnel, which dies when the laptop sleeps.
-- Webhooks authenticate with a plain `X-Tool-Secret` header stored in the tool config.
+- GitHub Actions checks every PR and runs the cheap evals on the PR's own agent branch. Deploys are manual.
+- The backend reaches ElevenLabs through a cloudflared quick tunnel, which dies when the laptop sleeps. The tools find it through the `backend_host` workspace variable, so a new tunnel needs no push.
+- Webhooks authenticate with a shared bearer token (`Authorization: Bearer`), sent from the `tool_secret` workspace secret.
 - The only way to talk to the agent is the dashboard Preview.
 
 ## Phase 0: Hardening the current client
@@ -23,28 +23,32 @@ Small fixes that the next phases depend on.
 
 **Done when:** a deploy or eval run survives one injected 504.
 
-## Phase 1: Agents as code and CI
+## Phase 1: Agents as code and CI — done
 
-Move the agent definition to the official ElevenLabs CLI (`elevenlabs agents`). Gate every change behind CI.
+Moved the agent definition to the official ElevenLabs CLI and gated every change behind CI.
 
-- Restructure `agent/`, `agent/tools.json` and `evals/tests.json` into the CLI layout: the `agents.json`, `tools.json` and `tests.json` registries, plus `agent_configs/`, `tool_configs/` and `test_configs/`.
-- Keep a small bootstrap script for what the CLI does not manage: workspace secrets, auth connections and environment variables.
-- Retire `scripts/deploy.py` once `push` and `pull` cover the agent, tools and tests. `scripts/run_evals.py` shrinks to report rendering, or goes away if `elevenlabs agents test` covers it.
-- Add a GitHub Actions workflow with two parts:
-  - **On every PR:** pytest against a MySQL service container, then ruff, pyright and `elevenlabs agents push --dry-run`.
-  - **On merge to main:** `push`, then `elevenlabs agents test` with a repeat count. The build fails if the pass rate drops below a threshold.
+- The agent and tools use the CLI layout. `scripts/deploy.py` and `agent/` are gone.
+- Tool URLs and the secret header reference workspace variables (`{{system__env_backend_host}}`, `env_var_label: tool_secret`), so the configs are committed as they are pushed. `tests/test_agent_configs.py` guards those references and `conversation_id`.
+- `ci.yml` runs pytest against a MySQL service, ruff and pyright on every PR. On a PR it also pushes the agent config to an ElevenLabs branch, `pr-<number>`, and runs the 7 cheap evals there; a failed eval fails the PR. `eval-branch-cleanup.yml` archives the branch when the PR closes.
+- `deploy.yml` pushes tools and agent from `main`, only when started by hand.
 
-**Done when:** a prompt change reaches the agent only through a merged PR with green evals.
+Decided differently from the plan:
 
-## Phase 2: Secrets and authentication
+- **Evals stay in `evals/tests.json`.** Moving them to the CLI's `test_configs/` was skipped; `run_evals.py` matches remote tests by name instead, so CI reuses them without a state file.
+- **No bootstrap script for the workspace variables.** They were created once in the dashboard, and the README lists them.
+- **Deploy is manual, not on merge.** Evals gate the PR on its own branch instead of after the deploy.
 
-Take credentials out of the tool config.
+Known limits: tools are shared by every agent branch, so a PR's tool changes are not tested in isolation; and all PRs share the same remote eval tests.
 
-- Store the tool secret as a workspace secret. The `X-Tool-Secret` header then references it by `secret_id` instead of holding the value.
-- Evaluate auth connections (`bearer_auth`, or `mtls` for a stricter setup) as the long-term replacement for the shared header.
-- Rotate the secret, and document the rotation procedure.
+## Phase 2: Secrets and authentication — done
 
-**Done when:** no secret value appears in any file in the repo or in a tool config returned by the API.
+Took credentials out of the tool config.
+
+- The tool secret lives in the `tool_secret` workspace variable, and the tools only reference it (done in Phase 1). Git history never held the value.
+- The secret was rotated, because the old value had sat in plain tool configs and may survive in old agent versions. The README documents the rotation.
+- The custom `X-Tool-Secret` header became a standard `Authorization: Bearer` header, checked with FastAPI's `HTTPBearer`. ElevenLabs' auth connections cover OAuth2 and Basic, not bearer tokens; their documented bearer setup is this secret-valued header.
+
+Deferred: **mTLS**, so that a leaked token alone can't call the backend. It needs TLS to end at the backend, and the quick tunnel ends it at Cloudflare. It belongs after Phase 3.
 
 ## Phase 3: Stable hosting
 

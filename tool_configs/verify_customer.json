@@ -6,7 +6,7 @@
   "api_schema": {
     "url": "https://{{system__env_backend_host}}/tools/verify_customer",
     "method": "POST",
-    "request_headers": {"X-Tool-Secret": {"env_var_label": "tool_secret"}},
+    "request_headers": {"Authorization": {"env_var_label": "tool_secret"}},
     "request_body_schema": {
       "type": "object",
       "description": "Datos de identificación dichos por el cliente.",
