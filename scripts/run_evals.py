@@ -355,7 +355,8 @@ def main(only: str | None, sim: bool, repeat: int, branch: str | None) -> bool:
 
     # 4. One invocation runs every selected test `repeat` times on ElevenLabs' side.
     run_request = build_run_request(test_ids, repeat, branch_id)
-    started = call_api(HttpMethod.POST, f"/v1/convai/agents/{agent_id}/run-tests", run_request)
+    # Safe to repeat: a duplicate invocation only costs credits, and the one polled below is complete.
+    started = call_api(HttpMethod.POST, f"/v1/convai/agents/{agent_id}/run-tests", run_request, safe_to_repeat=True)
     invocation = wait_for_invocation(started["id"])
 
     # 5. Only a full-suite run replaces the committed report.
