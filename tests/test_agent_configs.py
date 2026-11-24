@@ -25,7 +25,8 @@ from scripts.elevenlabs_api import (
 TOOL_CONFIG_PATHS = sorted((ROOT / "tool_configs").glob("*.json"))
 # Filled by ElevenLabs at call time from the workspace environment variables; never a literal value.
 BACKEND_URL_PREFIX = "https://{{system__env_backend_host}}/tools/"
-SECRET_HEADER = {"X-Tool-Secret": {"env_var_label": "tool_secret"}}
+# The variable holds the whole header value, "Bearer <token>"; ElevenLabs cannot prefix it.
+SECRET_HEADER = {"Authorization": {"env_var_label": "tool_secret"}}
 CONVERSATION_ID_PROPERTY = {"type": "string", "dynamic_variable": "system__conversation_id"}
 
 

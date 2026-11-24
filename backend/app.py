@@ -19,7 +19,8 @@ from collections.abc import Awaitable, Callable
 from typing import Annotated, NotRequired, TypedDict
 
 # Third-party
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 # Local
@@ -37,6 +38,8 @@ from backend.queries import (
 
 # backend.db already loaded ROOT/.env, so the secret is in the environment by now.
 TOOL_SECRET = os.environ.get("TOOL_SECRET", "")
+# auto_error=False lets require_tool_secret answer a missing header with the same 401 as a wrong one.
+BEARER_SCHEME = HTTPBearer(auto_error=False)
 LOG = logging.getLogger("bank")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
@@ -157,14 +160,15 @@ def to_spoken_transaction(row: TransactionRow) -> SpokenTransaction:
     }
 
 
-def require_tool_secret(x_tool_secret: Annotated[str, Header()] = "") -> None:
-    """Reject requests that don't carry the shared secret, so only the deployed agent can call the tools.
+def require_tool_secret(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(BEARER_SCHEME)]) -> None:
+    """Reject requests without `Authorization: Bearer <TOOL_SECRET>`, so only the deployed agent can call the tools.
 
     An unset TOOL_SECRET rejects everything: comparing against an empty secret would otherwise let a
-    request with no header through.
+    request with an empty token through.
     """
-    if not TOOL_SECRET or not secrets.compare_digest(x_tool_secret, TOOL_SECRET):
-        raise HTTPException(status_code=401, detail="missing or wrong X-Tool-Secret header")
+    token = credentials.credentials if credentials else ""
+    if not TOOL_SECRET or not secrets.compare_digest(token, TOOL_SECRET):
+        raise HTTPException(status_code=401, detail="missing or wrong bearer token", headers={"WWW-Authenticate": "Bearer"})
 
 
 app = FastAPI(title="Fake bank tools", dependencies=[Depends(require_tool_secret)])

@@ -18,6 +18,7 @@ from backend.queries import utc_now
 from backend.tables import card_blocks_t, cards_t, sessions_t
 
 TEST_SECRET = "test-secret"
+AUTH_HEADER = {"Authorization": f"Bearer {TEST_SECRET}"}
 # Annotated as httpx.Client, which TestClient subclasses: this Starlette version hides its own types from Pyright.
 CLIENT: httpx.Client = TestClient(bank.app)
 CALL_ID = "conv_test_call_1"
@@ -29,7 +30,7 @@ MARTIN = {"dni": "27987654", "card_last4": "1190"}
 # Utility functions
 def call_tool(tool: str, **body: Any) -> dict[str, Any]:
     """POST one tool call with the right secret, as part of CALL_ID unless the body names another Call."""
-    return CLIENT.post(f"/tools/{tool}", json={"conversation_id": CALL_ID, **body}, headers={"X-Tool-Secret": TEST_SECRET}).json()
+    return CLIENT.post(f"/tools/{tool}", json={"conversation_id": CALL_ID, **body}, headers=AUTH_HEADER).json()
 
 
 def open_session(identity: dict[str, str]) -> str:
@@ -49,13 +50,19 @@ def fresh_bank(monkeypatch: pytest.MonkeyPatch, test_engine: Engine) -> None:
 def test_request_without_secret_is_rejected() -> None:
     """Only the deployed agent, which sends the secret, may call the tools."""
     status = CLIENT.post("/tools/get_balance", json={"session_token": "x", "conversation_id": CALL_ID}).status_code
-    assert status == 401, f"expected 401 without X-Tool-Secret, got {status}"
+    assert status == 401, f"expected 401 without a bearer token, got {status}"
+
+
+def test_secret_outside_the_bearer_header_is_rejected() -> None:
+    """Only `Authorization: Bearer` authenticates; the right secret under the old X-Tool-Secret header must not."""
+    response = CLIENT.post("/tools/get_balance", json={"session_token": "x", "conversation_id": CALL_ID}, headers={"X-Tool-Secret": TEST_SECRET})
+    assert response.status_code == 401, f"expected 401 for the secret in X-Tool-Secret, got {response.status_code}"
 
 
 def test_unset_secret_rejects_every_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A backend started without TOOL_SECRET must not accept requests that send an empty header."""
+    """A backend started without TOOL_SECRET must not accept requests that send an empty token."""
     monkeypatch.setattr(bank, "TOOL_SECRET", "")
-    response = CLIENT.post("/tools/get_balance", json={"session_token": "x", "conversation_id": CALL_ID}, headers={"X-Tool-Secret": ""})
+    response = CLIENT.post("/tools/get_balance", json={"session_token": "x", "conversation_id": CALL_ID}, headers={"Authorization": "Bearer "})
     assert response.status_code == 401, f"expected 401 with no secret configured, got {response.status_code}"
 
 
@@ -73,7 +80,7 @@ def test_card_of_another_customer_does_not_verify() -> None:
 
 def test_empty_conversation_id_is_rejected() -> None:
     """A Session bound to an empty Call ID would be shared by every Call, so verification must refuse it."""
-    response = CLIENT.post("/tools/verify_customer", json={**LUCIA, "conversation_id": ""}, headers={"X-Tool-Secret": TEST_SECRET})
+    response = CLIENT.post("/tools/verify_customer", json={**LUCIA, "conversation_id": ""}, headers=AUTH_HEADER)
     assert response.status_code == 422, f"expected 422 for an empty conversation_id, got {response.status_code}"
 
 
@@ -122,7 +129,7 @@ def test_unknown_block_reason_is_an_error_the_agent_can_read() -> None:
     response = CLIENT.post(
         "/tools/block_card",
         json={"session_token": open_session(LUCIA), "card_last4": "4821", "reason": "me aburrí", "conversation_id": CALL_ID},
-        headers={"X-Tool-Secret": TEST_SECRET},
+        headers=AUTH_HEADER,
     )
     assert response.status_code == 200, f"expected 200, got {response.status_code}"
     assert "error" in response.json(), f"invalid reason was accepted: {response.json()}"

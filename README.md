@@ -13,7 +13,7 @@ The words the code and the docs use (Caller, Customer, Call, Verification, Sessi
 ```
  caller ──voice──▶ ElevenLabs Agent (ASR → LLM → TTS, es-AR)
                         │  webhook tools (POST to {{system__env_backend_host}}
-                        │                 + X-Tool-Secret + conversation_id)
+                        │                 + Authorization: Bearer + conversation_id)
                         ▼
                   backend/app.py  (FastAPI)
                   verify_customer ─▶ session_token, bound to this Call
@@ -28,7 +28,7 @@ The words the code and the docs use (Caller, Customer, Call, Verification, Sessi
 - **The backend enforces identity, not the prompt.** `verify_customer` returns an opaque `session_token`. Every account tool requires it and none of them accepts a customer ID. The prompt says "verify first", but if a jailbreak gets past the prompt, the agent still can't read an account the caller didn't verify. `tests/test_backend.py` checks that a guessed ID gets nothing.
 - **A Session lives for one Call.** Every tool request carries the ElevenLabs conversation ID, filled by the platform from `system__conversation_id`; the LLM never sees it and can't fake it. A token only works in the Call that verified it, with a 30-minute expiry as a backstop, because the backend never hears the hang-up. A token copied out of a transcript opens nothing in another Call.
 - **MySQL, not SQLite, on purpose.** Persistence alone would only need SQLite. MySQL is here so the backend talks to a database the way a real core-banking integration does: a server, a schema with migrations, transactions and row locks. `block_card` locks the card row (`SELECT … FOR UPDATE`), so two simultaneous blocks can't give one card two case numbers. Money is `DECIMAL(15, 2)`, never a float.
-- **Configs hold references, never values.** Each tool posts to `https://{{system__env_backend_host}}/tools/…` and sends `X-Tool-Secret` from the `tool_secret` workspace secret. ElevenLabs fills both in at call time. A new tunnel URL is one variable change, with no push, and no secret value ever sits in the repo or in a tool config. `tests/test_agent_configs.py` fails if a tool loses either reference or its `conversation_id`.
+- **Configs hold references, never values.** Each tool posts to `https://{{system__env_backend_host}}/tools/…` and sends an `Authorization: Bearer` header from the `tool_secret` workspace secret. ElevenLabs fills both in at call time. A new tunnel URL is one variable change, with no push, and no secret value ever sits in the repo or in a tool config. `tests/test_agent_configs.py` fails if a tool loses either reference or its `conversation_id`.
 - **One schema, no drift.** The tables are SQLAlchemy Core in `backend/tables.py`; Alembic migrations are generated from them, and `tests/test_migrations.py` fails if the two ever disagree. The test database is built by the real migrations, so a broken migration fails the tests first.
 - **Speech-to-text output is messy, so tool inputs get cleaned up.** People say "treinta millones ciento veintitrés mil…" or "30.123.456". The backend strips everything except digits from the DNI and card digits before matching.
 - **Tool errors come back as data, not HTTP errors.** For example `{"error": "DNI y tarjeta no coinciden"}`. That way the LLM can explain the problem to the caller instead of the call failing.
@@ -68,7 +68,9 @@ The tools read two workspace environment variables. Create them once in the dash
 | Label | Type | Value |
 |---|---|---|
 | `backend_host` | string | The tunnel's host, without `https://` (for example `abc-def.trycloudflare.com`) |
-| `tool_secret` | secret | The same value as `TOOL_SECRET` in `.env` |
+| `tool_secret` | secret | `Bearer ` followed by the value of `TOOL_SECRET` in `.env`. ElevenLabs sends the variable as the whole header value, so the scheme must be part of it. |
+
+To rotate the secret: generate a new token with `openssl rand -hex 32`, put it in `.env` as `TOOL_SECRET` and in `tool_secret` as `Bearer <token>`, then restart the backend. No push is needed, since the tools only reference the variable.
 
 Then open the agent in the ElevenLabs dashboard, click **Preview** and call it. After a demo call blocks a card, `uv run python -m scripts.seed_db` resets it. Test identities:
 
@@ -109,7 +111,7 @@ A PR branch holds its own copy of the agent config, so you can also make a Previ
 
 ## What I'd change for a real bank deployment
 
-- **Secrets:** replace the shared `X-Tool-Secret` with an auth connection (bearer or mTLS), and add request signing.
+- **Secrets:** replace the shared bearer token with mTLS, so a leaked token alone can't call the backend. It needs TLS to end at the backend, which the tunnel doesn't allow.
 - **Sessions:** end a Session the moment its Call ends, from ElevenLabs' post-call webhook, instead of waiting for the 30-minute backstop.
 - **Telephony:** connect a real number over SIP trunking or Twilio. Add a transfer-to-human tool instead of reading out the 0800 number.
 - **Compliance:** redact the DNI from transcripts, and add a second verification factor such as an OTP to the registered phone. Every block is already on record in `card_blocks`, with its case number and reason.
