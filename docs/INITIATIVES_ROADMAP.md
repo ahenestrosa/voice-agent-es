@@ -19,7 +19,7 @@ The words used here (Caller, Customer, Call, Verification, Session) are defined 
 Small fixes that the next phases depend on.
 
 - ~~Retry HTTP 504 with exponential backoff in `scripts/elevenlabs_api.py`.~~ Done: `call_api` retries a 504 after 2, 4 and 8 s. GET, PUT and PATCH always retry; a POST retries only when the caller marks it safe to repeat, since a 504 doesn't mean the server did nothing.
-- Add a LICENSE.
+- ~~Add a LICENSE.~~ Done: MIT.
 
 **Done when:** a deploy or eval run survives one injected 504.
 
